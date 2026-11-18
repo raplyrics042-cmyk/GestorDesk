@@ -1,11 +1,15 @@
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"irm https://raw.githubusercontent.com/raplyrics042-cmyk/GestorDesk/refs/heads/main/GestorAnyDesk.ps1 | iex`""
+    Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     exit
 }
 
 $userPath = "$env:APPDATA\AnyDesk"
 $sysPath = "$env:ProgramData\AnyDesk"
 $backupRoot = "$env:USERPROFILE\Desktop\RespaldoAnyDesk"
+
+function Write-Log($msg) {
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $msg"
+}
 
 function Get-AnyDeskId {
     $conf = Join-Path $sysPath "system.conf"
@@ -28,8 +32,14 @@ function Start-AnyDesk {
     if ($exe) { Start-Process $exe }
 }
 
+function Get-Backups {
+    if (Test-Path $backupRoot) {
+        return @(Get-ChildItem $backupRoot -Directory | Sort-Object Name -Descending | ForEach-Object { $_.Name })
+    }
+    return @()
+}
+
 function Backup-AnyDesk {
-    Write-Host "`n[+] Respaldando configuracion y sesiones..." -ForegroundColor Cyan
     Stop-AnyDesk
     $dest = Join-Path $backupRoot (Get-Date -Format "yyyy-MM-dd_HH-mm-ss")
     New-Item -ItemType Directory -Path "$dest\user" -Force | Out-Null
@@ -43,45 +53,40 @@ function Backup-AnyDesk {
         $p = Join-Path $sysPath $f
         if (Test-Path $p) { Copy-Item $p "$dest\system" -Force }
     }
-    Write-Host "[OK] Respaldo guardado en: $dest" -ForegroundColor Green
+    Write-Log "Respaldo creado en: $dest"
     Start-AnyDesk
-    Pause
 }
 
 function Restore-AnyDesk {
-    Write-Host "`n[+] Buscando respaldos disponibles en el Escritorio..." -ForegroundColor Cyan
-    if (!(Test-Path $backupRoot)) {
-        Write-Host "[!] No se encontro la carpeta de respaldos." -ForegroundColor Yellow
-        Pause
+    $backups = Get-Backups
+    if ($backups.Count -eq 0) {
+        Write-Log "No hay respaldos disponibles."
         return
     }
-    $backups = Get-ChildItem $backupRoot -Directory | Sort-Object Name -Descending
-    if (!$backups) {
-        Write-Host "[!] No hay respaldos guardados." -ForegroundColor Yellow
-        Pause
-        return
-    }
-    
+    Write-Host ""
+    Write-Host "Respaldos disponibles:"
     for ($i = 0; $i -lt $backups.Count; $i++) {
-        Write-Host "[$i] $($backups[$i].Name)"
+        Write-Host "  [$($i + 1)] $($backups[$i])"
     }
-    
-    $sel = Read-Host "Selecciona el numero del respaldo a restaurar"
-    if ($sel -match '^\d+$' -and $sel -lt $backups.Count) {
-        $src = $backups[$sel].FullName
-        Stop-AnyDesk
-        if (Test-Path "$src\user") { Copy-Item "$src\user\*" $userPath -Force }
-        if (Test-Path "$src\system") { Copy-Item "$src\system\*" $sysPath -Force }
-        Write-Host "[OK] Restauracion completada." -ForegroundColor Green
-        Start-AnyDesk
-    } else {
-        Write-Host "[X] Seleccion invalida." -ForegroundColor Red
+    $sel = Read-Host "Numero de respaldo a restaurar (Enter para cancelar)"
+    if ([string]::IsNullOrWhiteSpace($sel)) { return }
+    $idx = 0
+    if (-not [int]::TryParse($sel, [ref]$idx) -or $idx -lt 1 -or $idx -gt $backups.Count) {
+        Write-Log "Seleccion invalida."
+        return
     }
-    Pause
+    $name = $backups[$idx - 1]
+    $src = Join-Path $backupRoot $name
+    Stop-AnyDesk
+    if (Test-Path "$src\user") { Copy-Item "$src\user\*" $userPath -Force }
+    if (Test-Path "$src\system") { Copy-Item "$src\system\*" $sysPath -Force }
+    Write-Log "Restaurado: $name"
+    Start-AnyDesk
+    Start-Sleep -Seconds 2
+    Write-Log "ID actual: $(Get-AnyDeskId)"
 }
 
 function Clear-Traces {
-    Write-Host "`n[+] Ejecutando limpieza profunda..." -ForegroundColor Cyan
     Stop-AnyDesk
     $count = 0
     $targets = @(
@@ -102,31 +107,26 @@ function Clear-Traces {
             $count++
         }
     }
-    Write-Host "[OK] Limpieza profunda completada: $count archivo(s) eliminados." -ForegroundColor Green
+    Write-Log "Limpieza profunda completada: $count archivo(s) eliminados."
     Start-AnyDesk
     Start-Sleep -Seconds 2
-    Write-Host "[INFO] ID actual: $(Get-AnyDeskId)" -ForegroundColor Yellow
-    Pause
+    Write-Log "ID actual: $(Get-AnyDeskId)"
 }
 
-do {
-    Clear-Host
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "       GESTOR ANYDESK (MODO TEXTO)      " -ForegroundColor Yellow
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host " ID Actual: $(Get-AnyDeskId)" -ForegroundColor Green
-    Write-Host "----------------------------------------"
-    Write-Host " [1] Respaldar sesiones y configuracion"
-    Write-Host " [2] Restaurar un respaldo"
-    Write-Host " [3] Limpieza Profunda (Anti-publicidad)"
-    Write-Host " [4] Salir"
-    Write-Host "========================================"
-    $op = Read-Host "Selecciona una opcion"
-
+while ($true) {
+    Write-Host ""
+    Write-Host "===== Gestor AnyDesk ====="
+    Write-Host "ID actual: $(Get-AnyDeskId)"
+    Write-Host "[1] Respaldar"
+    Write-Host "[2] Restaurar"
+    Write-Host "[3] Limpieza Profunda"
+    Write-Host "[0] Salir"
+    $op = Read-Host "Opcion"
     switch ($op) {
-        '1' { Backup-AnyDesk }
-        '2' { Restore-AnyDesk }
-        '3' { Clear-Traces }
-        '4' { exit }
+        "1" { Backup-AnyDesk }
+        "2" { Restore-AnyDesk }
+        "3" { Clear-Traces }
+        "0" { break }
+        default { Write-Log "Opcion invalida." }
     }
-} while ($true)
+}
